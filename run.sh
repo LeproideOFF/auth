@@ -11,4 +11,7 @@ if [ -f .env ]; then
     export $(grep -v '^#' .env | xargs)
 fi
 
-java -Dserver.port=$PORT -Dvelocity.secret=$VELOCITY_SECRET -jar target/login-server-1.0-SNAPSHOT.jar
+# Utilisation de Java 26 (requis par Minestom 2026)
+JAVA_BIN="/opt/homebrew/opt/openjdk/bin/java"
+
+$JAVA_BIN -Dserver.port=$PORT -Dvelocity.secret=$VELOCITY_SECRET -jar target/login-server-1.0-SNAPSHOT.jar

@@ -38,9 +38,11 @@ public class LoginServer {
 
     public static void main(String[] args) {
         MinecraftServer minecraftServer;
-        if (!VELOCITY_SECRET.equals("votre_secret_ici")) {
+        if (VELOCITY_SECRET != null && !VELOCITY_SECRET.isEmpty() && !VELOCITY_SECRET.equals("votre_secret_ici")) {
+            System.out.println("Support Velocity activé.");
             minecraftServer = MinecraftServer.init(new Auth.Velocity(VELOCITY_SECRET));
         } else {
+            System.out.println("Support Velocity désactivé (Secret vide ou par défaut).");
             minecraftServer = MinecraftServer.init();
         }
 
