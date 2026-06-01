@@ -14,41 +14,36 @@ import net.minestom.server.instance.InstanceContainer;
 import net.minestom.server.instance.InstanceManager;
 import org.mindrot.jbcrypt.BCrypt;
 
-import java.io.ByteArrayOutputStream;
-import java.io.DataOutputStream;
-import java.io.IOException;
+import java.io.*;
+import java.sql.*;
 import java.time.Duration;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class LoginServer {
 
-    // Stockage (En prod: Utilisez une base de données !)
-    private static final Map<UUID, String> userPasswords = new HashMap<>(); // UUID -> Hash BCrypt
-    private static final Map<UUID, String> userLastIp = new HashMap<>();    // UUID -> Last IP
-    private static final Map<String, Set<UUID>> ipAccounts = new HashMap<>(); // IP -> Set of UUIDs
-    
-    // États temporaires
+    private static Connection db;
+    private static final String LOG_FILE = "security.log";
     private static final Map<UUID, Integer> loginAttempts = new HashMap<>();
     private static final Map<String, Long> ipRateLimit = new ConcurrentHashMap<>();
-    private static final Map<UUID, String> pendingCaptcha = new HashMap<>(); // UUID -> 4-digit code
-    
-    private static final String VELOCITY_SECRET = System.getProperty("velocity.secret", "votre_secret_ici");
+    private static final Map<UUID, String> pendingCaptcha = new HashMap<>();
+    private static final String VELOCITY_SECRET = System.getProperty("velocity.secret", "");
     private static final Random RANDOM = new Random();
 
     public static void main(String[] args) {
+        initDatabase();
+        
         MinecraftServer minecraftServer;
-        if (VELOCITY_SECRET != null && !VELOCITY_SECRET.isEmpty() && !VELOCITY_SECRET.equals("votre_secret_ici")) {
-            System.out.println("Support Velocity activé.");
+        if (!VELOCITY_SECRET.isEmpty() && !VELOCITY_SECRET.equals("votre_secret_ici")) {
             minecraftServer = MinecraftServer.init(new Auth.Velocity(VELOCITY_SECRET));
         } else {
-            System.out.println("Support Velocity désactivé (Secret vide ou par défaut).");
             minecraftServer = MinecraftServer.init();
         }
 
         InstanceManager instanceManager = MinecraftServer.getInstanceManager();
         InstanceContainer instanceContainer = instanceManager.createInstanceContainer();
-
         GlobalEventHandler globalEventHandler = MinecraftServer.getGlobalEventHandler();
 
         globalEventHandler.addListener(AsyncPlayerConfigurationEvent.class, event -> {
@@ -60,168 +55,184 @@ public class LoginServer {
             String ip = getCleanIp(player);
             UUID uuid = player.getUuid();
             
-            // Protection : Rate Limit par IP
+            // Anti-Spam IP
             long now = System.currentTimeMillis();
             if (ipRateLimit.containsKey(ip) && (now - ipRateLimit.get(ip) < 2000)) {
-                player.kick(Component.text("Trop de connexions. Attendez un peu.", NamedTextColor.RED));
+                player.kick(Component.text("Connexions trop rapides.", NamedTextColor.RED));
                 return;
             }
             ipRateLimit.put(ip, now);
 
-            // Protection : Redemander le MDP seulement si l'IP a changé
-            if (userPasswords.containsKey(uuid) && ip.equals(userLastIp.get(uuid))) {
-                player.sendMessage(Component.text("IP reconnue. Connexion automatique...", NamedTextColor.GREEN));
+            // Vérification auto-login (même IP)
+            if (isRegistered(uuid) && ip.equals(getLastIp(uuid))) {
+                player.sendMessage(Component.text("Bon retour ! IP identique, entrez le captcha.", NamedTextColor.GREEN));
                 generateAndSendCaptcha(player);
                 return;
             }
 
+            // Message de bienvenue
             player.sendMessage(Component.text("-----------------------------------", NamedTextColor.GRAY));
-            player.sendMessage(Component.text("Serveur de Login Ultra-Sécurisé", NamedTextColor.YELLOW));
-            if (userPasswords.containsKey(uuid)) {
-                player.sendMessage(Component.text("Veuillez utiliser /login <motdepasse>", NamedTextColor.WHITE));
+            if (isRegistered(uuid)) {
+                player.sendMessage(Component.text("Veuillez utiliser /login <password>", NamedTextColor.YELLOW));
             } else {
-                player.sendMessage(Component.text("Veuillez utiliser /register <motdepasse>", NamedTextColor.GOLD));
+                player.sendMessage(Component.text("Bienvenue ! Veuillez faire /register <password>", NamedTextColor.GOLD));
             }
             player.sendMessage(Component.text("-----------------------------------", NamedTextColor.GRAY));
 
-            // Auto-kick si inactivé
-            MinecraftServer.getSchedulerManager().buildTask(() -> {
-                if (player.isOnline() && !isFullyAuthenticated(player)) {
-                    player.kick(Component.text("Délai d'authentification dépassé.", NamedTextColor.RED));
-                }
-            }).delay(Duration.ofSeconds(60)).schedule();
+            // Détection Bedrock (Geyser utilise souvent des pseudos commençant par *)
+            if (player.getUsername().startsWith("*")) {
+                player.sendMessage(Component.text("Joueur Bedrock détecté.", NamedTextColor.AQUA));
+            }
         });
 
         // Commande /register
         Command registerCommand = new Command("register");
-        var regPasswordArg = ArgumentType.String("password");
+        var regPass = ArgumentType.String("password");
         registerCommand.addSyntax((sender, context) -> {
             if (!(sender instanceof Player player)) return;
-            UUID uuid = player.getUuid();
             String ip = getCleanIp(player);
-
-            if (userPasswords.containsKey(uuid)) {
+            if (isRegistered(player.getUuid())) {
                 player.sendMessage(Component.text("Déjà enregistré.", NamedTextColor.RED));
                 return;
             }
-
-            // Protection E: Max 2 comptes par IP
-            Set<UUID> accounts = ipAccounts.getOrDefault(ip, new HashSet<>());
-            if (accounts.size() >= 2 && !accounts.contains(uuid)) {
-                player.kick(Component.text("Maximum 2 comptes par IP autorisé.", NamedTextColor.RED));
+            if (getIpAccountCount(ip) >= 2) {
+                player.kick(Component.text("Max 2 comptes par IP.", NamedTextColor.RED));
                 return;
             }
-
-            String password = context.get(regPasswordArg);
+            String password = context.get(regPass);
             if (password.length() < 6) {
-                player.sendMessage(Component.text("MDP trop court (min 6).", NamedTextColor.RED));
+                player.sendMessage(Component.text("Mot de passe trop court.", NamedTextColor.RED));
                 return;
             }
-
-            // Protection C: BCrypt Hash
-            String hashed = BCrypt.hashpw(password, BCrypt.gensalt());
-            userPasswords.put(uuid, hashed);
-            userLastIp.put(uuid, ip);
-            accounts.add(uuid);
-            ipAccounts.put(ip, accounts);
-
-            player.sendMessage(Component.text("Enregistré avec succès !", NamedTextColor.GREEN));
+            saveUser(player.getUuid(), BCrypt.hashpw(password, BCrypt.gensalt()), ip);
+            player.sendMessage(Component.text("Enregistré !", NamedTextColor.GREEN));
             generateAndSendCaptcha(player);
-        }, regPasswordArg);
+        }, regPass);
 
         // Commande /login
         Command loginCommand = new Command("login");
-        var loginPasswordArg = ArgumentType.String("password");
+        var logPass = ArgumentType.String("password");
         loginCommand.addSyntax((sender, context) -> {
             if (!(sender instanceof Player player)) return;
             UUID uuid = player.getUuid();
-            
-            if (!userPasswords.containsKey(uuid)) {
-                player.sendMessage(Component.text("Utilisez /register d'abord.", NamedTextColor.RED));
+            if (!isRegistered(uuid)) {
+                player.sendMessage(Component.text("Utilisez /register.", NamedTextColor.RED));
                 return;
             }
-
-            String password = context.get(loginPasswordArg);
-            if (BCrypt.checkpw(password, userPasswords.get(uuid))) {
-                userLastIp.put(uuid, getCleanIp(player));
+            if (BCrypt.checkpw(context.get(logPass), getHashedPassword(uuid))) {
+                updateIp(uuid, getCleanIp(player));
                 loginAttempts.remove(uuid);
                 generateAndSendCaptcha(player);
             } else {
-                int attempts = loginAttempts.getOrDefault(uuid, 0) + 1;
-                loginAttempts.put(uuid, attempts);
-                if (attempts >= 3) {
-                    player.kick(Component.text("3 échecs. Proxy kick.", NamedTextColor.RED));
-                } else {
-                    player.sendMessage(Component.text("Mauvais MDP (" + attempts + "/3).", NamedTextColor.RED));
-                }
+                int att = loginAttempts.getOrDefault(uuid, 0) + 1;
+                loginAttempts.put(uuid, att);
+                logSecurity("Échec login: " + player.getUsername() + " [" + getCleanIp(player) + "] (" + att + "/3)");
+                if (att >= 3) player.kick(Component.text("3 échecs.", NamedTextColor.RED));
+                else player.sendMessage(Component.text("Mauvais mot de passe.", NamedTextColor.RED));
             }
-        }, loginPasswordArg);
+        }, logPass);
 
-        // Commande /captcha
-        Command captchaCommand = new Command("confirm");
+        // Commande /confirm
+        Command confirmCommand = new Command("confirm");
         var codeArg = ArgumentType.String("code");
-        captchaCommand.addSyntax((sender, context) -> {
+        confirmCommand.addSyntax((sender, context) -> {
             if (!(sender instanceof Player player)) return;
-            UUID uuid = player.getUuid();
-            String input = context.get(codeArg);
-
-            if (pendingCaptcha.containsKey(uuid) && pendingCaptcha.get(uuid).equals(input)) {
-                pendingCaptcha.remove(uuid);
-                player.sendMessage(Component.text("Vérification réussie ! Redirection...", NamedTextColor.GREEN));
+            if (pendingCaptcha.getOrDefault(player.getUuid(), "").equals(context.get(codeArg))) {
+                pendingCaptcha.remove(player.getUuid());
                 redirect(player);
             } else {
-                player.kick(Component.text("Code invalide. Bot détecté ?", NamedTextColor.RED));
+                logSecurity("Échec captcha: " + player.getUsername() + " [" + getCleanIp(player) + "]");
+                player.kick(Component.text("Captcha invalide.", NamedTextColor.RED));
             }
         }, codeArg);
 
         MinecraftServer.getCommandManager().register(registerCommand);
         MinecraftServer.getCommandManager().register(loginCommand);
-        MinecraftServer.getCommandManager().register(captchaCommand);
+        MinecraftServer.getCommandManager().register(confirmCommand);
 
-        // Commande /status pour voir la RAM
-        Command statusCommand = new Command("status");
-        statusCommand.setDefaultExecutor((sender, context) -> {
-            long heapSize = Runtime.getRuntime().totalMemory();
-            long heapFreeSize = Runtime.getRuntime().freeMemory();
-            long usedMemory = (heapSize - heapFreeSize) / 1024 / 1024;
-            long maxMemory = Runtime.getRuntime().maxMemory() / 1024 / 1024;
-            
-            sender.sendMessage(Component.text("--- Statut Serveur ---", NamedTextColor.AQUA));
-            sender.sendMessage(Component.text("RAM Utilisée : ", NamedTextColor.GRAY)
-                    .append(Component.text(usedMemory + " MB", NamedTextColor.YELLOW)));
-            sender.sendMessage(Component.text("RAM Max : ", NamedTextColor.GRAY)
-                    .append(Component.text(maxMemory + " MB", NamedTextColor.YELLOW)));
-            sender.sendMessage(Component.text("Joueurs : ", NamedTextColor.GRAY)
-                    .append(Component.text(MinecraftServer.getConnectionManager().getOnlinePlayers().size(), NamedTextColor.YELLOW)));
-        });
-        MinecraftServer.getCommandManager().register(statusCommand);
-
-        // Task périodique pour log la RAM toutes les 5 minutes
+        // Monitoring
         MinecraftServer.getSchedulerManager().buildTask(() -> {
-            long usedMemory = (Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory()) / 1024 / 1024;
-            System.out.println("[MONITOR] RAM Utilisée : " + usedMemory + " MB");
-        }).repeat(Duration.ofMinutes(5)).schedule();
+            long used = (Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory()) / 1024 / 1024;
+            System.out.println("[MONITOR] RAM: " + used + " MB | SQL: Active");
+        }).repeat(Duration.ofMinutes(1)).schedule();
 
         int port = Integer.getInteger("server.port", 25500);
-        System.out.println("Micro-serveur de login (ULTRA-SECURE) démarré sur le port " + port);
-        
-        // Nettoyage forcé au démarrage pour rester sous les 32Mo
         System.gc();
-        
         minecraftServer.start("0.0.0.0", port);
+    }
+
+    private static void initDatabase() {
+        try {
+            db = DriverManager.getConnection("jdbc:sqlite:auth.db");
+            Statement s = db.createStatement();
+            s.execute("CREATE TABLE IF NOT EXISTS users (uuid TEXT PRIMARY KEY, password TEXT, last_ip TEXT)");
+            System.out.println("SQLite initialisé avec succès.");
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private static boolean isRegistered(UUID uuid) {
+        try (PreparedStatement ps = db.prepareStatement("SELECT uuid FROM users WHERE uuid = ?")) {
+            ps.setString(1, uuid.toString());
+            return ps.executeQuery().next();
+        } catch (SQLException e) { return false; }
+    }
+
+    private static void saveUser(UUID uuid, String hash, String ip) {
+        try (PreparedStatement ps = db.prepareStatement("INSERT INTO users VALUES (?, ?, ?)")) {
+            ps.setString(1, uuid.toString());
+            ps.setString(2, hash);
+            ps.setString(3, ip);
+            ps.executeUpdate();
+        } catch (SQLException e) { e.printStackTrace(); }
+    }
+
+    private static String getHashedPassword(UUID uuid) {
+        try (PreparedStatement ps = db.prepareStatement("SELECT password FROM users WHERE uuid = ?")) {
+            ps.setString(1, uuid.toString());
+            ResultSet rs = ps.executeQuery();
+            return rs.next() ? rs.getString("password") : "";
+        } catch (SQLException e) { return ""; }
+    }
+
+    private static String getLastIp(UUID uuid) {
+        try (PreparedStatement ps = db.prepareStatement("SELECT last_ip FROM users WHERE uuid = ?")) {
+            ps.setString(1, uuid.toString());
+            ResultSet rs = ps.executeQuery();
+            return rs.next() ? rs.getString("last_ip") : "";
+        } catch (SQLException e) { return ""; }
+    }
+
+    private static void updateIp(UUID uuid, String ip) {
+        try (PreparedStatement ps = db.prepareStatement("UPDATE users SET last_ip = ? WHERE uuid = ?")) {
+            ps.setString(1, ip);
+            ps.setString(2, uuid.toString());
+            ps.executeUpdate();
+        } catch (SQLException e) { e.printStackTrace(); }
+    }
+
+    private static int getIpAccountCount(String ip) {
+        try (PreparedStatement ps = db.prepareStatement("SELECT COUNT(*) FROM users WHERE last_ip = ?")) {
+            ps.setString(1, ip);
+            ResultSet rs = ps.executeQuery();
+            return rs.next() ? rs.getInt(1) : 0;
+        } catch (SQLException e) { return 0; }
     }
 
     private static void generateAndSendCaptcha(Player player) {
         String code = String.format("%04d", RANDOM.nextInt(10000));
         pendingCaptcha.put(player.getUuid(), code);
-        player.sendMessage(Component.text("\n[ANTI-BOT]", NamedTextColor.RED));
-        player.sendMessage(Component.text("Veuillez entrer le code suivant : ", NamedTextColor.WHITE)
+        player.sendMessage(Component.text("\n[ANTIBOT] Code: ", NamedTextColor.RED)
                 .append(Component.text(code, NamedTextColor.YELLOW, net.kyori.adventure.text.format.TextDecoration.BOLD)));
-        player.sendMessage(Component.text("Tapez : /confirm " + code, NamedTextColor.GRAY));
+        player.sendMessage(Component.text("Tapez /confirm " + code, NamedTextColor.GRAY));
     }
 
-    private static boolean isFullyAuthenticated(Player player) {
-        return !pendingCaptcha.containsKey(player.getUuid()) && (userPasswords.containsKey(player.getUuid()));
+    private static void logSecurity(String msg) {
+        try (FileWriter fw = new FileWriter(LOG_FILE, true); PrintWriter pw = new PrintWriter(fw)) {
+            String time = LocalDateTime.now().format(DateTimeFormatter.ofPattern("dd/MM HH:mm:ss"));
+            pw.println("[" + time + "] " + msg);
+        } catch (IOException e) { e.printStackTrace(); }
     }
 
     private static String getCleanIp(Player player) {
@@ -232,15 +243,14 @@ public class LoginServer {
 
     private static void redirect(Player player) {
         String[] lobbies = {"lobby1", "lobby2", "lobby3", "lobby4", "lobby5"};
-        String targetLobby = lobbies[RANDOM.nextInt(lobbies.length)];
+        String target = lobbies[RANDOM.nextInt(lobbies.length)];
         try {
             ByteArrayOutputStream b = new ByteArrayOutputStream();
             DataOutputStream out = new DataOutputStream(b);
             out.writeUTF("Connect");
-            out.writeUTF(targetLobby);
+            out.writeUTF(target);
             player.sendPluginMessage("bungeecord:main", b.toByteArray());
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
+            System.out.println("Redirection: " + player.getUsername() + " -> " + target);
+        } catch (IOException e) { e.printStackTrace(); }
     }
 }
