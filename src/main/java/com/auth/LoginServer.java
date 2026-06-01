@@ -65,7 +65,7 @@ public class LoginServer {
             
             long now = System.currentTimeMillis();
             if (ipRateLimit.containsKey(ip) && (now - ipRateLimit.get(ip) < 2000)) {
-                player.kick(Component.text("Connexions trop rapides.", NamedTextColor.RED));
+                player.kick(Component.text("[FortiMC]Connexions trop rapides.", NamedTextColor.RED));
                 return;
             }
             ipRateLimit.put(ip, now);
@@ -76,9 +76,9 @@ public class LoginServer {
                 return;
             }
 
-            player.sendMessage(Component.text("--- Serveur de Login ---", NamedTextColor.YELLOW));
-            if (isRegistered(uuid)) player.sendMessage(Component.text("Tapez /login <pass>", NamedTextColor.WHITE));
-            else player.sendMessage(Component.text("Tapez /register <pass>", NamedTextColor.GOLD));
+            player.sendMessage(Component.text("--- FortiMC ---", NamedTextColor.YELLOW));
+            if (isRegistered(uuid)) player.sendMessage(Component.text("[FortiMC]Tapez /login <pass>", NamedTextColor.WHITE));
+            else player.sendMessage(Component.text("[FortiMC]Tapez /register <pass>", NamedTextColor.GOLD));
         });
 
         // Commandes
@@ -88,11 +88,11 @@ public class LoginServer {
             if (!(sender instanceof Player player)) return;
             if (isRegistered(player.getUuid())) return;
             if (getIpAccountCount(getCleanIp(player)) >= 2) {
-                player.kick(Component.text("Max 2 comptes par IP.", NamedTextColor.RED));
+                player.kick(Component.text("[FortiMC]Max 2 comptes par IP.", NamedTextColor.RED));
                 return;
             }
             saveUser(player.getUuid(), BCrypt.hashpw(context.get(regPass), BCrypt.gensalt()), getCleanIp(player));
-            player.sendMessage(Component.text("Enregistré !", NamedTextColor.GREEN));
+            player.sendMessage(Component.text("[FortiMC]Enregistré !", NamedTextColor.GREEN));
             generateAndSendCaptcha(player);
         }, regPass);
 
@@ -110,7 +110,7 @@ public class LoginServer {
                 loginAttempts.put(uuid, att);
                 logSecurity("Échec login: " + player.getUsername() + " (" + att + "/3)");
                 if (att >= 3) player.kick(Component.text("3 échecs.", NamedTextColor.RED));
-                else player.sendMessage(Component.text("Mauvais mot de passe.", NamedTextColor.RED));
+                else player.sendMessage(Component.text("[FortiMC]Mauvais mot de passe.", NamedTextColor.RED));
             }
         }, logPass);
 
@@ -121,7 +121,7 @@ public class LoginServer {
             if (pendingCaptcha.getOrDefault(player.getUuid(), "").equals(context.get(codeArg))) {
                 pendingCaptcha.remove(player.getUuid());
                 redirect(player);
-            } else player.kick(Component.text("Captcha invalide.", NamedTextColor.RED));
+            } else player.kick(Component.text("[FortiMC]Captcha invalide.", NamedTextColor.RED));
         }, codeArg);
 
         MinecraftServer.getCommandManager().register(registerCommand);
@@ -139,7 +139,7 @@ public class LoginServer {
             server.createContext("/", new AdminHandler());
             server.setExecutor(null);
             server.start();
-            System.out.println("Panel Admin Web démarré sur http://localhost:8080 (Token: " + ADMIN_TOKEN + ")");
+            System.out.println("[CONSOLE]Panel Admin Web démarré sur http://localhost:8080 (Token: " + ADMIN_TOKEN + ")");
         } catch (IOException e) {
             e.printStackTrace();
         }
@@ -279,8 +279,8 @@ public class LoginServer {
     private static void generateAndSendCaptcha(Player player) {
         String code = String.format("%04d", RANDOM.nextInt(10000));
         pendingCaptcha.put(player.getUuid(), code);
-        player.sendMessage(Component.text("\n[ANTIBOT] Code: ", NamedTextColor.RED).append(Component.text(code, NamedTextColor.YELLOW)));
-        player.sendMessage(Component.text("Tapez /confirm " + code, NamedTextColor.GRAY));
+        player.sendMessage(Component.text("\n[FortiMC] Code: ", NamedTextColor.RED).append(Component.text(code, NamedTextColor.YELLOW)));
+        player.sendMessage(Component.text("[FortiMC]Tapez /confirm " + code, NamedTextColor.GRAY));
     }
 
     private static void logSecurity(String msg) {
@@ -305,3 +305,4 @@ public class LoginServer {
         } catch (IOException e) { e.printStackTrace(); }
     }
 }
+
