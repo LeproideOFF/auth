@@ -11,7 +11,8 @@ if [ -f .env ]; then
     export $(grep -v '^#' .env | xargs)
 fi
 
-# Utilisation de Java 26 (requis par Minestom 2026)
+# Utilisation de Java 26 avec une limite de RAM stricte à 32Mo
 JAVA_BIN="/opt/homebrew/opt/openjdk/bin/java"
 
-$JAVA_BIN -Dserver.port=$PORT -Dvelocity.secret=$VELOCITY_SECRET -jar target/login-server-1.0-SNAPSHOT.jar
+# Limite à 48Mo (32Mo est trop juste pour l'initialisation des registres Minestom/Minecraft)
+$JAVA_BIN -Xmx48m -Xms32m -XX:+UseSerialGC -Dserver.port=$PORT -Dvelocity.secret=$VELOCITY_SECRET -jar target/login-server-1.0-SNAPSHOT.jar

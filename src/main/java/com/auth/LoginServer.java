@@ -178,8 +178,36 @@ public class LoginServer {
         MinecraftServer.getCommandManager().register(loginCommand);
         MinecraftServer.getCommandManager().register(captchaCommand);
 
+        // Commande /status pour voir la RAM
+        Command statusCommand = new Command("status");
+        statusCommand.setDefaultExecutor((sender, context) -> {
+            long heapSize = Runtime.getRuntime().totalMemory();
+            long heapFreeSize = Runtime.getRuntime().freeMemory();
+            long usedMemory = (heapSize - heapFreeSize) / 1024 / 1024;
+            long maxMemory = Runtime.getRuntime().maxMemory() / 1024 / 1024;
+            
+            sender.sendMessage(Component.text("--- Statut Serveur ---", NamedTextColor.AQUA));
+            sender.sendMessage(Component.text("RAM Utilisée : ", NamedTextColor.GRAY)
+                    .append(Component.text(usedMemory + " MB", NamedTextColor.YELLOW)));
+            sender.sendMessage(Component.text("RAM Max : ", NamedTextColor.GRAY)
+                    .append(Component.text(maxMemory + " MB", NamedTextColor.YELLOW)));
+            sender.sendMessage(Component.text("Joueurs : ", NamedTextColor.GRAY)
+                    .append(Component.text(MinecraftServer.getConnectionManager().getOnlinePlayers().size(), NamedTextColor.YELLOW)));
+        });
+        MinecraftServer.getCommandManager().register(statusCommand);
+
+        // Task périodique pour log la RAM toutes les 5 minutes
+        MinecraftServer.getSchedulerManager().buildTask(() -> {
+            long usedMemory = (Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory()) / 1024 / 1024;
+            System.out.println("[MONITOR] RAM Utilisée : " + usedMemory + " MB");
+        }).repeat(Duration.ofMinutes(5)).schedule();
+
         int port = Integer.getInteger("server.port", 25500);
         System.out.println("Micro-serveur de login (ULTRA-SECURE) démarré sur le port " + port);
+        
+        // Nettoyage forcé au démarrage pour rester sous les 32Mo
+        System.gc();
+        
         minecraftServer.start("0.0.0.0", port);
     }
 
