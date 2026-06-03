@@ -55,6 +55,15 @@ public class LoginServer {
         GlobalEventHandler globalEventHandler = MinecraftServer.getGlobalEventHandler();
 
         globalEventHandler.addListener(AsyncPlayerConfigurationEvent.class, event -> {
+            Player player = event.getPlayer();
+            String ip = getCleanIp(player);
+            long now = System.currentTimeMillis();
+
+            if (ipRateLimit.containsKey(ip) && (now - ipRateLimit.get(ip) < 1500)) {
+                player.kick(Component.text("[FortiMC]Connexions trop rapides.", NamedTextColor.RED));
+                return;
+            }
+            ipRateLimit.put(ip, now);
             event.setSpawningInstance(instanceContainer);
         });
 
@@ -62,13 +71,6 @@ public class LoginServer {
             Player player = event.getPlayer();
             String ip = getCleanIp(player);
             UUID uuid = player.getUuid();
-            
-            long now = System.currentTimeMillis();
-            if (ipRateLimit.containsKey(ip) && (now - ipRateLimit.get(ip) < 2000)) {
-                player.kick(Component.text("[FortiMC]Connexions trop rapides.", NamedTextColor.RED));
-                return;
-            }
-            ipRateLimit.put(ip, now);
 
             if (isRegistered(uuid) && ip.equals(getLastIp(uuid))) {
                 player.sendMessage(Component.text("IP reconnue, entrez le captcha.", NamedTextColor.GREEN));
@@ -291,7 +293,7 @@ public class LoginServer {
 
     private static String getCleanIp(Player player) {
         String addr = player.getPlayerConnection().getRemoteAddress().toString();
-        if (addr.startsWith("/")) addr = addr.substring(1);
+        if (addr.contains("/")) addr = addr.substring(addr.lastIndexOf("/") + 1);
         return addr.split(":")[0];
     }
 
