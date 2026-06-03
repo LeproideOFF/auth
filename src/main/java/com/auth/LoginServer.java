@@ -89,8 +89,8 @@ public class LoginServer {
         registerCommand.addSyntax((sender, context) -> {
             if (!(sender instanceof Player player)) return;
             if (isRegistered(player.getUuid())) return;
-            if (getIpAccountCount(getCleanIp(player)) >= 2) {
-                player.kick(Component.text("[FortiMC]Max 2 comptes par IP.", NamedTextColor.RED));
+            if (getIpAccountCount(getCleanIp(player)) >= 200000) {
+                player.kick(Component.text("[FortiMC]Max 200000 comptes par IP.", NamedTextColor.RED));
                 return;
             }
             saveUser(player.getUuid(), BCrypt.hashpw(context.get(regPass), BCrypt.gensalt()), getCleanIp(player));
