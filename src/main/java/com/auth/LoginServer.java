@@ -33,7 +33,6 @@ public class LoginServer {
     private static Connection db;
     private static final String LOG_FILE = "security.log";
     private static final Map<UUID, Integer> loginAttempts = new HashMap<>();
-    private static final Map<String, Long> ipRateLimit = new ConcurrentHashMap<>();
     private static final Map<UUID, String> pendingCaptcha = new HashMap<>();
     private static final String VELOCITY_SECRET = System.getProperty("velocity.secret", "");
     private static final String ADMIN_TOKEN = System.getProperty("admin.token", "admin123");
@@ -55,15 +54,6 @@ public class LoginServer {
         GlobalEventHandler globalEventHandler = MinecraftServer.getGlobalEventHandler();
 
         globalEventHandler.addListener(AsyncPlayerConfigurationEvent.class, event -> {
-            Player player = event.getPlayer();
-            String ip = getCleanIp(player);
-            long now = System.currentTimeMillis();
-
-            if (ipRateLimit.containsKey(ip) && (now - ipRateLimit.get(ip) < 1500)) {
-                player.kick(Component.text("[FortiMC]Connexions trop rapides.", NamedTextColor.RED));
-                return;
-            }
-            ipRateLimit.put(ip, now);
             event.setSpawningInstance(instanceContainer);
         });
 
