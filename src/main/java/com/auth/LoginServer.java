@@ -34,21 +34,25 @@ public class LoginServer {
     private static final String LOG_FILE = "security.log";
     private static final Map<UUID, Integer> loginAttempts = new HashMap<>();
     private static final Map<UUID, String> pendingCaptcha = new HashMap<>();
-    private static final String VELOCITY_SECRET = System.getProperty("velocity.secret", "");
+    private static final String VELOCITY_SECRET = System.getProperty("velocity.secret", "").trim();
     private static final String ADMIN_TOKEN = System.getProperty("admin.token", "admin123");
     private static final Random RANDOM = new Random();
 
     public static void main(String[] args) {
-        initDatabase();
-        startWebServer();
-        
+        // Initialisation Minestom avec support Velocity si présent
         MinecraftServer minecraftServer;
         if (!VELOCITY_SECRET.isEmpty() && !VELOCITY_SECRET.equals("votre_secret_ici")) {
+            System.out.println("[INFO] Tentative d'activation du support Velocity avec secret: " + VELOCITY_SECRET.substring(0, Math.min(3, VELOCITY_SECRET.length())) + "...");
             minecraftServer = MinecraftServer.init(new Auth.Velocity(VELOCITY_SECRET));
+            System.out.println("[INFO] Support Velocity (Modern Forwarding) ACTIVÉ.");
         } else {
+            System.out.println("[WARN] Secret Velocity absent ou par défaut. Mode offline classique.");
             minecraftServer = MinecraftServer.init();
         }
 
+        initDatabase();
+        startWebServer();
+        
         InstanceManager instanceManager = MinecraftServer.getInstanceManager();
         InstanceContainer instanceContainer = instanceManager.createInstanceContainer();
         GlobalEventHandler globalEventHandler = MinecraftServer.getGlobalEventHandler();
@@ -297,4 +301,3 @@ public class LoginServer {
         } catch (IOException e) { e.printStackTrace(); }
     }
 }
-
