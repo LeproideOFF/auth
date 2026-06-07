@@ -22,9 +22,14 @@ mvn package
 ```
 
 ### Lancement
-Vous pouvez utiliser le script fourni :
+Sur Linux/macOS :
 ```bash
 ./run.sh
+```
+
+Sur Windows :
+```cmd
+run.bat
 ```
 
 Ou manuellement :
