@@ -4,7 +4,7 @@
 # Port par défaut : 25500
 PORT=25500
 # Secret Velocity (laisser vide pour désactiver le support Velocity)
-VELOCITY_SECRET=""
+VELOCITY_SECRET="sII87EnuTLpn"
 
 # Chargement des variables si un fichier .env existe
 if [ -f .env ]; then
